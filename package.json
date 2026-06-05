@@ -1,31 +1,32 @@
 {
-  "name": "cex",
-  "module": "index.ts",
-  "type": "module",
-  "private": true,
-  "devDependencies": {
-    "@types/bun": "latest",
-    "@types/pg": "^8.20.0",
-    "prisma": "^7.8.0"
-  },
-  "scripts": {
-    "dev": "bun --watch index.ts"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "dependencies": {
-    "@joint-ops/hitlimit": "^1.5.0",
-    "@joint-ops/hitlimit-bun": "^1.5.0",
-    "@prisma/adapter-pg": "^7.8.0",
-    "@prisma/client": "^7.8.0",
-    "@types/bcrypt": "^6.0.0",
-    "@types/express": "^5.0.6",
-    "@types/jsonwebtoken": "^9.0.10",
-    "bcrypt": "^6.0.0",
-    "express": "^5.2.1",
-    "jsonwebtoken": "^9.0.3",
-    "pg": "^8.21.0",
-    "zod": "^4.4.3"
-  }
+    "name": "cex",
+    "module": "index.ts",
+    "type": "module",
+    "private": true,
+    "devDependencies": {
+        "@types/bun": "latest",
+        "@types/pg": "^8.20.0",
+        "prisma": "^7.8.0"
+    },
+    "scripts": {
+        "dev": "bun --watch index.ts",
+        "seed": "bun utils/seed.ts"
+    },
+    "peerDependencies": {
+        "typescript": "^5"
+    },
+    "dependencies": {
+        "@joint-ops/hitlimit": "^1.5.0",
+        "@joint-ops/hitlimit-bun": "^1.5.0",
+        "@prisma/adapter-pg": "^7.8.0",
+        "@prisma/client": "^7.8.0",
+        "@types/bcrypt": "^6.0.0",
+        "@types/express": "^5.0.6",
+        "@types/jsonwebtoken": "^9.0.10",
+        "bcrypt": "^6.0.0",
+        "express": "^5.2.1",
+        "jsonwebtoken": "^9.0.3",
+        "pg": "^8.21.0",
+        "zod": "^4.4.3"
+    }
 }
