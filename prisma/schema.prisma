@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String        @id @default(uuid())
+  email         String        @unique
+  password      String
+  balances      Balance[]
+  transactions  Transaction[]
+  orders        Order[]
+  ledgerEvents  LedgerEvent[]
+}
+
+model Balance {
+  id         String   @id @default(uuid())
+  asset      String
+  available  Int
+  reserved   Int
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, asset])
+  @@index([userId])
+}
+
+model Transaction {
+  id         String   @id @default(uuid())
+  type       String
+  asset      String
+  amount     Int
+  status     String
+  txnhash    String   @default(uuid())
+  direction  String
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model Market {
+  id         String   @id @default(uuid())
+  pair       String   @unique
+  baseAsset  String
+  quoteAsset String
+  minOrder   Int
+  tickSize   Int
+  makerFee   Int
+  takerFee   Int
+  status     String
+  orders     Order[]
+}
+
+model Order {
+  id           String   @id @default(uuid())
+  pair         String
+  side         String
+  type         String
+  price        Int
+  quantity     Int
+  filledQty    Int
+  avgFillPrice Int
+  status       String
+  createdAt    DateTime @default(now())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  marketId     String
+  market       Market   @relation(fields: [marketId], references: [id])
+
+  buyTrades    Trade[]  @relation("BuyOrderTrades")
+  sellTrades   Trade[]  @relation("SellOrderTrades")
+
+  @@index([userId])
+  @@index([marketId])
+}
+
+model Trade {
+  id           String        @id @default(uuid())
+  buyOrderId   String
+  sellOrderId  String
+  pair         String
+  price        Int
+  qty          Int
+  buyerFee     Int
+  sellerFee    Int
+  executedAt   DateTime      @default(now())
+
+  buyOrder     Order         @relation("BuyOrderTrades", fields: [buyOrderId], references: [id])
+  sellOrder    Order         @relation("SellOrderTrades", fields: [sellOrderId], references: [id])
+  ledgerEvents LedgerEvent[]
+
+  @@index([buyOrderId])
+  @@index([sellOrderId])
+}
+
+model LedgerEvent {
+  id           String    @id @default(uuid())
+  asset        String
+  eventType    String
+  delta        Int
+  balanceAfter Int
+  createdAt    DateTime  @default(now())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id])
+  tradeId      String?
+  trade        Trade?    @relation(fields: [tradeId], references: [id])
+
+  @@index([userId])
+  @@index([tradeId])
+}
