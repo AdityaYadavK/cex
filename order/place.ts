@@ -9,64 +9,56 @@ const router = express.Router();
 
 const schema = z.object({
     pair: z.string(),
-    side: z.string(),
-    type: z.string(),
-    price: z.number(),
-    quantity: z.number(),
+    side: z.enum(["buy", "sell"]),
+    type: z.enum(["limit", "market"]),
+    price: z.number().positive().optional(),
+    quantity: z.number().positive(),
 });
 
 router.post(
     "/",
     middleware,
     async (req: Request, res: Response, next: NextFunction) => {
-        const userId = res.locals.id;
+        const userId = res.locals.id as string;
+
         const result = schema.safeParse(req.body);
         if (!result.success) {
-            return next(new AppError("invalid schema", 401));
+            return next(new AppError("invalid schema", 400));
         }
+
         const { pair, side, type, price, quantity } = result.data;
 
-        // side : buy/sell,
-        // type : limit/market,
-        if (!["buy", "sell"].includes(side)) {
-            return next(new AppError("side error", 400));
-        }
-        if (!["limit", "market"].includes(type)) {
-            return next(new AppError("type error", 400));
-        }
-        if (type == "limit" && !price) {
-            return next(new AppError("limit requires price", 400));
+        // zod already validates side and type — no need for manual checks
+        if (type === "limit" && !price) {
+            return next(new AppError("limit order requires price", 400));
         }
 
-        // validate market exists and is active
-        const market = await prisma.market.findUnique({
-            where: {
-                pair,
-            },
-        });
-        if (!market) return next(new AppError("invalid market", 404));
-        if (market.status !== "active") {
-            return next(new AppError("inactive market", 402));
-        }
-
-        // validate quantity >= minorder
-        if (quantity < market.minOrder) {
-            return next(new AppError(`min order ${market.minOrder}`, 402));
-        }
+        const market = await prisma.market.findUnique({ where: { pair } });
+        if (!market) return next(new AppError("market not found", 404));
+        if (market.status !== "active")
+            return next(new AppError("market halted", 400));
+        if (quantity < market.minOrder)
+            return next(
+                new AppError(`min order size is ${market.minOrder}`, 400),
+            );
 
         // lock funds
         const lockAsset = side === "buy" ? market.quoteAsset : market.baseAsset;
-        const lockAmount = side === "buy" ? price * quantity : quantity;
+        // market buy: price is undefined — lock available balance, caller must pass quantity in quote units
+        const lockAmount = side === "buy" ? (price ?? 0) * quantity : quantity;
+
+        if (lockAmount <= 0) {
+            return next(new AppError("invalid lock amount", 400));
+        }
 
         const balance = await prisma.balance.findUnique({
             where: { userId_asset: { userId, asset: lockAsset } },
         });
 
         if (!balance || balance.available < lockAmount) {
-            return res.status(400).json({ error: "insufficient balance" });
+            return next(new AppError("insufficient balance", 400));
         }
 
-        // atomic: move available → reserved
         await prisma.balance.update({
             where: { userId_asset: { userId, asset: lockAsset } },
             data: {
@@ -75,7 +67,6 @@ router.post(
             },
         });
 
-        // 5. create order in db
         const order = await prisma.order.create({
             data: {
                 userId,
@@ -91,7 +82,6 @@ router.post(
             },
         });
 
-        // 6. run matching engine
         const orderWithMeta = {
             ...order,
             pair: market.pair,
@@ -101,7 +91,6 @@ router.post(
 
         const trades = await match(orderWithMeta);
 
-        // 7. persist final order status
         await prisma.order.update({
             where: { id: order.id },
             data: {

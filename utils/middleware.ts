@@ -2,11 +2,13 @@ import express, { Request, Response, NextFunction } from "express";
 import { AppError } from "./error.ts";
 import jwt from "jsonwebtoken";
 
-const router = express.Router();
-
-router.post("/", async (req: Request, res: Response, next: NextFunction) => {
+export default async function middleware(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) {
     const token = req.cookies.token;
-    if (!token) return next(new AppError("Unauthorized!", 402));
+    if (!token) return next(new AppError("Unauthorized!", 401));
     try {
         const payload = jwt.verify(token, "maxver");
         if (typeof payload == "string") {
@@ -16,10 +18,8 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
         next();
     } catch (e: unknown) {
         if (e instanceof Error) {
-            return next(new AppError(e.message, 500));
+            return next(new AppError(e.message, 401));
         }
-        return next(new AppError("invalid token", 403));
+        return next(new AppError("invalid token", 401));
     }
-});
-
-export default router;
+}

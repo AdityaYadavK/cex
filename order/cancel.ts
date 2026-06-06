@@ -1,14 +1,18 @@
 // orders/cancel.ts
-import { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import { prisma } from "../utils/db";
+import { AppError } from "../utils/error.ts";
+import middleware from "../utils/middleware.ts";
 
-export async function cancelOrder(req: Request, res: Response) {
+const router = express.Router();
+
+router.delete("/:id", middleware, async (req: Request, res: Response, next: NextFunction) => {
     try {
         const userId = res.locals.id;
         const { id } = req.params;
 
         if (typeof id !== "string") {
-            return;
+            return next(new AppError("invalid order id", 400));
         }
 
         // 1. find order — must belong to this user
@@ -61,4 +65,6 @@ export async function cancelOrder(req: Request, res: Response) {
     } catch (err) {
         return res.status(500).json({ error: "internal server error" });
     }
-}
+});
+
+export default router;
