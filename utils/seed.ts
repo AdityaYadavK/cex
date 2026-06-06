@@ -166,7 +166,7 @@ async function main() {
                 tickSize: 1,
                 makerFee: 10,
                 takerFee: 10,
-                status: "halted",
+                status: "inactive",
             },
         ],
         skipDuplicates: true,
