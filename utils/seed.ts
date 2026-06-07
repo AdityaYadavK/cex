@@ -49,7 +49,7 @@ const TRADING_PAIRS = [
     { pair: "BNB/BTC", baseAsset: "BNB", quoteAsset: "BTC", minOrder: 0.001, tickSize: 0.00001, makerFee: 0.1, takerFee: 0.1 },
     { pair: "XRP/BTC", baseAsset: "XRP", quoteAsset: "BTC", minOrder: 1, tickSize: 0.0000001, makerFee: 0.1, takerFee: 0.1 },
     { pair: "DOGE/BTC", baseAsset: "DOGE", quoteAsset: "BTC", minOrder: 10, tickSize: 0.00000001, makerFee: 0.1, takerFee: 0.1 },
-    { pair: "SHIB/USDT", baseAsset: "SHIB", quoteAsset: "USDT", minOrder: 10000, tickSize: 0.000001, makerFee: 0.1, takerFee: 0.1 },
+    { pair: "SHIB/USDT", baseAsset: "SHIB", quoteAsset: "USDT", minOrder: 1000, tickSize: 0.000001, makerFee: 0.1, takerFee: 0.1 },
 ];
 
 // User data
@@ -81,8 +81,8 @@ async function main() {
             pair: p.pair,
             baseAsset: p.baseAsset,
             quoteAsset: p.quoteAsset,
-            minOrder: Math.round(p.minOrder * 100000000), // Convert to integer (8 decimals)
-            tickSize: Math.round(p.tickSize * 100000000), // Convert to integer (8 decimals)
+            minOrder: Math.round(p.minOrder * 100), // Convert to integer (2 decimals)
+            tickSize: Math.round(p.tickSize * 100), // Convert to integer (2 decimals)
             makerFee: Math.round(p.makerFee * 100), // Convert to basis points
             takerFee: Math.round(p.takerFee * 100), // Convert to basis points
             status: p.pair === "SHIB/USDT" ? "inactive" : "active",
@@ -118,17 +118,24 @@ async function main() {
         const isBot = user.email === "bot@example.com";
 
         for (const [asset, config] of Object.entries(ASSETS)) {
-            const baseAmount = isWhale ? randomInt(100, 1000) : (isBot ? randomInt(50, 200) : randomInt(1, 50));
-            const multiplier = asset === "USDT" ? 1000000 : (asset === "BTC" ? 1 : 10);
-            const available = Math.round(baseAmount * multiplier * 100000000); // Convert to 8 decimals
+            const baseAmount = isWhale ? randomInt(100, 500) : (isBot ? randomInt(50, 100) : randomInt(1, 20));
+            const multiplier = asset === "USDT" ? 1000 : (asset === "BTC" ? 1 : 10);
+            const available = Math.round(baseAmount * multiplier * 100); // Convert to 2 decimals
 
-            await prisma.balance.create({
-                data: {
+            await prisma.balance.upsert({
+                where: {
+                    userId_asset: {
+                        userId: user.id,
+                        asset: asset,
+                    },
+                },
+                create: {
                     userId: user.id,
                     asset: asset,
                     available: available,
                     reserved: 0,
                 },
+                update: {}, // Don't update existing balances
             });
         }
     }
@@ -140,8 +147,10 @@ async function main() {
     const orderTypes = ["limit", "market"];
     const orderSides = ["buy", "sell"];
 
-    for (const market of marketRecords) {
-        if (market.status === "inactive") continue;
+    // Only create orders for the first 5 active markets for performance
+    const activeMarkets = marketRecords.filter(m => m.status === "active").slice(0, 5);
+
+    for (const market of activeMarkets) {
 
         const [baseAsset, quoteAsset] = market.pair.split("/");
         const baseConfig = ASSETS[baseAsset as keyof typeof ASSETS];
@@ -154,9 +163,9 @@ async function main() {
         const quotePrice = randomDecimal(quoteConfig.priceRange[0], quoteConfig.priceRange[1], 2);
         const pairPrice = baseAsset === "USDT" ? quotePrice : (quoteAsset === "USDT" ? basePrice : basePrice / quotePrice);
 
-        // Create orders for each user
+        // Create orders for each user (limit to 2-3 orders per user per market for performance)
         for (const user of createdUsers) {
-            const numOrders = randomInt(5, 15);
+            const numOrders = randomInt(2, 3);
 
             for (let i = 0; i < numOrders; i++) {
                 const side = randomPick(orderSides);
@@ -165,12 +174,12 @@ async function main() {
 
                 // Generate price around current market price with some spread
                 const spread = randomDecimal(-0.02, 0.02, 4); // ±2% spread
-                const price = Math.round((pairPrice * (1 + spread)) * 100000000); // Convert to 8 decimals
+                const price = Math.round((pairPrice * (1 + spread)) * 100); // Convert to 2 decimals
 
                 // Generate quantity
-                const minOrder = market.minOrder / 100000000; // Convert back from integer
+                const minOrder = market.minOrder / 100; // Convert back from integer
                 const maxQuantity = randomInt(Math.round(minOrder * 10), Math.round(minOrder * 100));
-                const quantity = Math.round(randomDecimal(minOrder, maxQuantity, 8) * 100000000); // Convert to 8 decimals
+                const quantity = Math.round(randomDecimal(minOrder, maxQuantity, 2) * 100); // Convert to 2 decimals
 
                 let filledQty = 0;
                 if (status === "partial") {
@@ -197,9 +206,9 @@ async function main() {
                     },
                 });
 
-                // Create trades for filled/partial orders
+                // Create trades for filled/partial orders (limit to 1-2 trades per order for performance)
                 if (filledQty > 0) {
-                    const numTrades = status === "filled" ? randomInt(1, 5) : 1;
+                    const numTrades = status === "filled" ? randomInt(1, 2) : 1;
                     let remainingFillQty = filledQty;
 
                     for (let j = 0; j < numTrades && remainingFillQty > 0; j++) {
@@ -245,7 +254,7 @@ async function main() {
 
                         // Create ledger events for the trade
                         const asset = side === "buy" ? baseAsset : quoteAsset;
-                        const delta = side === "buy" ? tradeQty : Math.round(tradeQty * tradePrice / 100000000);
+                        const delta = side === "buy" ? tradeQty : Math.round(tradeQty * tradePrice / 100);
 
                         await prisma.ledgerEvent.create({
                             data: {
@@ -271,10 +280,10 @@ async function main() {
                     }
                 }
 
-                // Create deposit transactions for some users
-                if (i === 0) {
+                // Create deposit transactions for some users (only for first user, first order per market)
+                if (i === 0 && user.email === "trader1@example.com") {
                     const asset = randomPick(Object.keys(ASSETS));
-                    const amount = Math.round(randomDecimal(100, 10000, 2) * 100000000);
+                    const amount = Math.round(randomDecimal(100, 10000, 2) * 100);
 
                     await prisma.transaction.create({
                         data: {
@@ -303,12 +312,84 @@ async function main() {
     }
     console.log("   Orders and trades created");
 
+    // Create specific orderbook data for all active markets
+    console.log("📚 Creating orderbook data for all pairs...");
+    for (const market of marketRecords) {
+        if (market.status === "inactive") continue;
+
+        const [baseAsset, quoteAsset] = market.pair.split("/");
+        const baseConfig = ASSETS[baseAsset as keyof typeof ASSETS];
+        const quoteConfig = ASSETS[quoteAsset as keyof typeof ASSETS];
+        
+        if (!baseConfig || !quoteConfig) continue;
+
+        // Generate base price for this pair
+        const basePrice = randomDecimal(baseConfig.priceRange[0], baseConfig.priceRange[1], 2);
+        const quotePrice = randomDecimal(quoteConfig.priceRange[0], quoteConfig.priceRange[1], 2);
+        const pairPrice = baseAsset === "USDT" ? quotePrice : (quoteAsset === "USDT" ? basePrice : basePrice / quotePrice);
+
+        // Create bid orders (buy orders) - descending price
+        const numBids = randomInt(8, 15);
+        for (let i = 0; i < numBids; i++) {
+            const spread = randomDecimal(-0.05, -0.001, 4); // Negative spread for bids (below market price)
+            const price = Math.round((pairPrice * (1 + spread)) * 100);
+            const minOrder = Math.max(1, market.minOrder / 100); // Ensure at least 1
+            const quantity = Math.max(1, Math.round(randomDecimal(minOrder, minOrder * randomInt(5, 20), 2) * 100)); // Ensure at least 1
+            
+            const user = randomPick(createdUsers);
+            
+            await prisma.order.create({
+                data: {
+                    userId: user.id,
+                    marketId: market.id,
+                    pair: market.pair,
+                    side: "buy",
+                    type: "limit",
+                    price: price,
+                    quantity: quantity,
+                    filledQty: 0,
+                    avgFillPrice: 0,
+                    status: "open",
+                    createdAt: new Date(Date.now() - randomInt(0, 3600000)), // Last hour
+                },
+            });
+        }
+
+        // Create ask orders (sell orders) - ascending price
+        const numAsks = randomInt(8, 15);
+        for (let i = 0; i < numAsks; i++) {
+            const spread = randomDecimal(0.001, 0.05, 4); // Positive spread for asks (above market price)
+            const price = Math.round((pairPrice * (1 + spread)) * 100);
+            const minOrder = Math.max(1, market.minOrder / 100); // Ensure at least 1
+            const quantity = Math.max(1, Math.round(randomDecimal(minOrder, minOrder * randomInt(5, 20), 2) * 100)); // Ensure at least 1
+            
+            const user = randomPick(createdUsers);
+            
+            await prisma.order.create({
+                data: {
+                    userId: user.id,
+                    marketId: market.id,
+                    pair: market.pair,
+                    side: "sell",
+                    type: "limit",
+                    price: price,
+                    quantity: quantity,
+                    filledQty: 0,
+                    avgFillPrice: 0,
+                    status: "open",
+                    createdAt: new Date(Date.now() - randomInt(0, 3600000)), // Last hour
+                },
+            });
+        }
+    }
+    console.log("   Orderbook data created for all active pairs");
+
     console.log("✅ Seed completed successfully!");
     console.log(`   - ${marketRecords.length} markets`);
     console.log(`   - ${createdUsers.length} users`);
     console.log(`   - Multiple balances per user`);
-    console.log(`   - Hundreds of orders across all pairs`);
-    console.log(`   - Thousands of trades`);
+    console.log(`   - Historical orders and trades`);
+    console.log(`   - Live orderbook data for all pairs`);
     console.log(`   - Deposit transactions and ledger events`);
 }
 
