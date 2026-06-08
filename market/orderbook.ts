@@ -27,7 +27,7 @@ router.get(
         const open = await prisma.order.findMany({
             where: {
                 marketId: market.id,
-                status: { in: ["open", "partial"] },
+                status: { in: ["OPEN", "partial"] },
             },
             select: {
                 side: true,

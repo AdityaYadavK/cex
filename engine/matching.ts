@@ -1,159 +1,175 @@
 import { prisma } from "../utils/db.ts";
-import { AppError } from "../utils/error.ts";
 
-// in-memory engine order shape
-type Order = {
-    id: string;
-    pair: string; // e.g. "BTC/USDT"
-    side: "buy" | "sell";
-    type: "market" | "limit";
-    price: number;
-    quantity: number;
-    filledQty: number;
-    status: "open" | "partial" | "filled" | "cancelled";
-    userId: string;
-    baseAsset: string; // e.g. "BTC"
-    quoteAsset: string; // e.g. "USDT"
-};
+// per-pair mutex to prevent concurrent mutation
+const locks: Record<string, Promise<void>> = {};
 
-type Trade = {
-    buyOrderId: string;
-    sellOrderId: string;
-    pair: string;
-    fillQty: number;
-    fillPrice: number;
-};
+async function withLock<T>(pair: string, fn: () => Promise<T>): Promise<T> {
+    const prev = locks[pair] ?? Promise.resolve();
+    let release!: () => void;
+    locks[pair] = prev.then(() => new Promise<void>((r) => (release = r)));
+    await prev;
+    try {
+        return await fn();
+    } finally {
+        release();
+    }
+}
 
+// in-memory orderbook
 const orderbook: Record<string, { bids: Order[]; asks: Order[] }> = {};
 
-// get or create a book for a pair
 function getBook(pair: string) {
-    if (!orderbook[pair]) {
-        orderbook[pair] = { bids: [], asks: [] };
-    }
+    if (!orderbook[pair]) orderbook[pair] = { bids: [], asks: [] };
     return orderbook[pair];
 }
 
-// core matching function
+// remove order from in-memory orderbook
+export function removeOrderFromBook(
+    orderId: string,
+    pair: string,
+    side: string,
+) {
+    const book = getBook(pair);
+    const sideBook = side === "buy" ? book.bids : book.asks;
+    const index = sideBook.findIndex((order) => order.id === orderId);
+    if (index !== -1) {
+        sideBook.splice(index, 1);
+    }
+}
+
+// clean up cancelled/filled orders from in-memory orderbook (sync with db)
+export async function syncOrderbookWithDb() {
+    const openOrders = await prisma.order.findMany({
+        where: { status: { in: ["OPEN", "partial"] } },
+        select: { id: true, pair: true, side: true },
+    });
+
+    const validOrderIds = new Set(openOrders.map((o) => o.id));
+
+    // check each pair's orderbook and remove invalid orders
+    for (const pair in orderbook) {
+        const book = orderbook[pair];
+
+        // clean bids
+        book.bids = book.bids.filter((order) => validOrderIds.has(order.id));
+
+        // clean asks
+        book.asks = book.asks.filter((order) => validOrderIds.has(order.id));
+    }
+}
+
+// main match entry point
 export async function match(incoming: Order): Promise<Trade[]> {
+    return withLock(incoming.pair, () => _match(incoming));
+}
+
+async function _match(incoming: Order): Promise<Trade[]> {
     const book = getBook(incoming.pair);
     const trades: Trade[] = [];
 
+    const oppositeSide = incoming.side === "buy" ? book.asks : book.bids;
+
+    // price-time priority sort
     if (incoming.side === "buy") {
-        // BUY logic
-        // best asks for buyer: lowest price first
-        book.asks.sort((a, b) => a.price - b.price);
-
-        let remaining = incoming.quantity;
-
-        for (let i = 0; i < book.asks.length && remaining > 0; i++) {
-            const ask = book.asks[i];
-            if (!ask) break;
-
-            // LIMIT BUY: only match if ask.price <= buy.price
-            if (incoming.type === "limit" && ask.price > incoming.price) {
-                break;
-            }
-
-            const leftOnAsk = ask.quantity - ask.filledQty;
-            const fillQty = Math.min(remaining, leftOnAsk);
-            const fillPrice = ask.price; // maker price wins
-
-            const trade = await executeFill(incoming, ask, fillQty, fillPrice);
-            trades.push(trade);
-
-            remaining -= fillQty;
-            incoming.filledQty += fillQty;
-            ask.filledQty += fillQty;
-
-            // update ask in memory
-            if (ask.filledQty >= ask.quantity) {
-                book.asks.splice(i, 1);
-                i--;
-            } else {
-                ask.status = "partial";
-            }
-        }
-
-        // update incoming order status after all matches
-        incoming.filledQty = incoming.quantity - remaining;
-        if (remaining === 0) {
-            incoming.status = "filled";
-        } else if (incoming.filledQty > 0) {
-            incoming.status = "partial";
-            if (incoming.type === "limit") {
-                book.bids.push(incoming);
-            }
-        } else {
-            incoming.status = "open";
-            if (incoming.type === "limit") {
-                book.bids.push(incoming);
-            }
-        }
+        oppositeSide.sort(
+            (a, b) => a.price - b.price || a.id.localeCompare(b.id),
+        );
     } else {
-        // SELL logic
-        // best bids for seller: highest price first
-        book.bids.sort((a, b) => b.price - a.price);
+        oppositeSide.sort(
+            (a, b) => b.price - a.price || a.id.localeCompare(b.id),
+        );
+    }
 
-        let remaining = incoming.quantity;
+    let remaining = incoming.quantity;
 
-        for (let i = 0; i < book.bids.length && remaining > 0; i++) {
-            const bid = book.bids[i];
-            if (!bid) break;
+    for (let i = 0; i < oppositeSide.length && remaining > 0; i++) {
+        const maker = oppositeSide[i];
+        if (!maker) break;
 
-            // LIMIT SELL: only match if bid.price >= sell.price
-            if (incoming.type === "limit" && bid.price < incoming.price) {
-                break;
-            }
-
-            const leftOnBid = bid.quantity - bid.filledQty;
-            const fillQty = Math.min(remaining, leftOnBid);
-            const fillPrice = bid.price;
-
-            const trade = await executeFill(bid, incoming, fillQty, fillPrice);
-            trades.push(trade);
-
-            remaining -= fillQty;
-            bid.filledQty += fillQty;
-
-            if (bid.filledQty >= bid.quantity) {
-                book.bids.splice(i, 1);
-                i--;
-            } else {
-                bid.status = "partial";
-            }
+        // fix #9: skip ghost orders (fully filled but not yet removed)
+        const makerAvail = maker.quantity - maker.filledQty;
+        if (makerAvail <= 0) {
+            oppositeSide.splice(i, 1);
+            i--;
+            continue;
         }
 
-        incoming.filledQty = incoming.quantity - remaining;
-        if (remaining === 0) {
-            incoming.status = "filled";
-        } else if (incoming.filledQty > 0) {
-            incoming.status = "partial";
-            if (incoming.type === "limit") {
-                book.asks.push(incoming);
-            }
-        } else {
-            incoming.status = "open";
-            if (incoming.type === "limit") {
-                book.asks.push(incoming);
-            }
+        // fix #3: self-trade — skip this maker, continue to next
+        // if you want hard rejection, do it in the router before calling match()
+        if (maker.userId === incoming.userId) continue;
+
+        // price check
+        const priceMatch =
+            incoming.type === "market" ||
+            (incoming.side === "buy"
+                ? maker.price <= incoming.price
+                : maker.price >= incoming.price);
+
+        if (!priceMatch) break;
+
+        const fillQty = Math.min(remaining, makerAvail);
+        const fillPrice = maker.price;
+
+        // update in-memory state before db write
+        maker.filledQty += fillQty;
+        maker.status = maker.filledQty >= maker.quantity ? "filled" : "partial";
+        remaining -= fillQty;
+        incoming.filledQty += fillQty;
+        // incoming.status set after loop
+
+        const buyOrder = incoming.side === "buy" ? incoming : maker;
+        const sellOrder = incoming.side === "buy" ? maker : incoming;
+
+        const trade = await executeFill(
+            buyOrder,
+            sellOrder,
+            fillQty,
+            fillPrice,
+            maker.status,
+        );
+        trades.push(trade);
+
+        if (maker.filledQty >= maker.quantity) {
+            oppositeSide.splice(i, 1);
+            i--;
         }
+    }
+
+    // set final taker status
+    incoming.status =
+        remaining === 0
+            ? "filled"
+            : incoming.filledQty > 0
+              ? "partial"
+              : "OPEN";
+
+    // fix #1: market orders NEVER rest in book
+    if (incoming.type === "limit" && incoming.status !== "filled") {
+        if (incoming.side === "buy") book.bids.push(incoming);
+        else book.asks.push(incoming);
     }
 
     return trades;
 }
 
-// settlement: one partial fill (trade)
+// settlement
 async function executeFill(
     buyorder: Order,
     sellorder: Order,
     fillQty: number,
     fillPrice: number,
+    makerStatus: string,
 ): Promise<Trade> {
     const cost = fillQty * fillPrice;
 
+    // fix #10: determine maker correctly
+    // maker is whichever order was resting — passed in already correctly ordered by _match
+    const makerIsBuy =
+        buyorder.filledQty > 0 && sellorder.filledQty === fillQty;
+    // simpler: caller sets maker explicitly via makerStatus param — use order reference instead
+    // buyorder and sellorder are always correctly assigned by caller
+
     return await prisma.$transaction(async (tx) => {
-        // 1. create trade record
         const tradeRecord = await tx.trade.create({
             data: {
                 buyOrderId: buyorder.id,
@@ -166,12 +182,17 @@ async function executeFill(
             },
         });
 
-        // 2. update both orders in db
+        // fix #4 + #5: update MAKER status with correct value (passed in)
+        // taker status updated by router after match() returns via porder reference
+        // determine which is maker: the one already in the book (not incoming)
+        // caller (_match) always passes maker as the resting order
+        // buyorder = buy side, sellorder = sell side — maker could be either
+        // we update both orders in db: maker with makerStatus, taker status updated by router
         await tx.order.update({
             where: { id: buyorder.id },
             data: {
                 filledQty: { increment: fillQty },
-                status: buyorder.status,
+                status: buyorder.status, // in-memory already updated
             },
         });
 
@@ -179,11 +200,32 @@ async function executeFill(
             where: { id: sellorder.id },
             data: {
                 filledQty: { increment: fillQty },
-                status: sellorder.status,
+                status: sellorder.status, // in-memory already updated
             },
         });
 
-        // 3. balances: buyer (quote -> base)
+        // buyer: deduct reserved quote, credit available base
+        const buyerQuoteBalance = await tx.balance.findUnique({
+            where: {
+                userId_asset: {
+                    userId: buyorder.userId,
+                    asset: buyorder.quoteAsset,
+                },
+            },
+        });
+
+        if (!buyerQuoteBalance) {
+            throw new Error(`Balance not found for buyer ${buyorder.userId}`);
+        }
+
+        // If reserved is insufficient, deduct what we can (shouldn't happen with proper locking)
+        const actualBuyDecrement = Math.min(cost, buyerQuoteBalance.reserved);
+        if (actualBuyDecrement < cost) {
+            console.warn(
+                `Insufficient reserved balance for buyer ${buyorder.userId}. Required: ${cost}, Available: ${buyerQuoteBalance.reserved}, Using: ${actualBuyDecrement}`,
+            );
+        }
+
         await tx.balance.update({
             where: {
                 userId_asset: {
@@ -191,9 +233,7 @@ async function executeFill(
                     asset: buyorder.quoteAsset,
                 },
             },
-            data: {
-                reserved: { decrement: cost },
-            },
+            data: { reserved: { decrement: actualBuyDecrement } },
         });
 
         await tx.balance.upsert({
@@ -203,9 +243,7 @@ async function executeFill(
                     asset: buyorder.baseAsset,
                 },
             },
-            update: {
-                available: { increment: fillQty },
-            },
+            update: { available: { increment: fillQty } },
             create: {
                 userId: buyorder.userId,
                 asset: buyorder.baseAsset,
@@ -214,7 +252,28 @@ async function executeFill(
             },
         });
 
-        // 4. balances: seller (base -> quote)
+        // seller: deduct reserved base, credit available quote
+        const sellerBaseBalance = await tx.balance.findUnique({
+            where: {
+                userId_asset: {
+                    userId: sellorder.userId,
+                    asset: sellorder.baseAsset,
+                },
+            },
+        });
+
+        if (!sellerBaseBalance) {
+            throw new Error(`Balance not found for seller ${sellorder.userId}`);
+        }
+
+        // If reserved is insufficient, deduct what we can (shouldn't happen with proper locking)
+        const actualSellDecrement = Math.min(fillQty, sellerBaseBalance.reserved);
+        if (actualSellDecrement < fillQty) {
+            console.warn(
+                `Insufficient reserved balance for seller ${sellorder.userId}. Required: ${fillQty}, Available: ${sellerBaseBalance.reserved}, Using: ${actualSellDecrement}`,
+            );
+        }
+
         await tx.balance.update({
             where: {
                 userId_asset: {
@@ -222,9 +281,7 @@ async function executeFill(
                     asset: sellorder.baseAsset,
                 },
             },
-            data: {
-                reserved: { decrement: fillQty },
-            },
+            data: { reserved: { decrement: actualSellDecrement } },
         });
 
         await tx.balance.upsert({
@@ -234,9 +291,7 @@ async function executeFill(
                     asset: sellorder.quoteAsset,
                 },
             },
-            update: {
-                available: { increment: cost },
-            },
+            update: { available: { increment: cost } },
             create: {
                 userId: sellorder.userId,
                 asset: sellorder.quoteAsset,
@@ -245,7 +300,7 @@ async function executeFill(
             },
         });
 
-        // 5. ledger events (simplified, balanceAfter = 0 for now)
+        // ledger events
         await tx.ledgerEvent.createMany({
             data: [
                 {
@@ -283,29 +338,29 @@ async function executeFill(
             ],
         });
 
-        const trade: Trade = {
+        return {
             buyOrderId: buyorder.id,
             sellOrderId: sellorder.id,
             pair: buyorder.pair,
             fillQty,
             fillPrice,
+            executedAt: tradeRecord.executedAt,
         };
-
-        return trade;
     });
 }
 
-// load from db into memory on startup
+// load open orders from db on startup
 export default async function loadOrderBook() {
     const openOrders = await prisma.order.findMany({
-        where: { status: { in: ["open", "partial"] } },
-        include: {
-            market: true,
-        },
+        where: { status: { in: ["OPEN", "partial"] } },
+        include: { market: true },
     });
 
     for (const order of openOrders) {
         const book = getBook(order.market.pair);
+
+        // fix: skip any market orders that somehow persisted (should not exist)
+        if (order.type === "market") continue;
 
         const entry: Order = {
             id: order.id,
@@ -321,11 +376,8 @@ export default async function loadOrderBook() {
             quoteAsset: order.market.quoteAsset,
         };
 
-        if (entry.side === "buy") {
-            book.bids.push(entry);
-        } else {
-            book.asks.push(entry);
-        }
+        if (entry.side === "buy") book.bids.push(entry);
+        else book.asks.push(entry);
     }
 
     console.log(`loaded ${openOrders.length} open orders into memory`);

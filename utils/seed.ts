@@ -143,7 +143,7 @@ async function main() {
 
     // Create orders and trades
     console.log("📈 Creating orders and trades...");
-    const orderStatuses = ["open", "partial", "filled", "cancelled"];
+    const orderStatuses = ["OPEN", "partial", "filled", "cancelled"];
     const orderTypes = ["limit", "market"];
     const orderSides = ["buy", "sell"];
 
@@ -174,12 +174,12 @@ async function main() {
 
                 // Generate price around current market price with some spread
                 const spread = randomDecimal(-0.02, 0.02, 4); // ±2% spread
-                const price = Math.round((pairPrice * (1 + spread)) * 100); // Convert to 2 decimals
+                const price = Math.max(1, Math.round((pairPrice * (1 + spread)) * 100)); // Convert to 2 decimals, ensure at least 1
 
                 // Generate quantity
-                const minOrder = market.minOrder / 100; // Convert back from integer
+                const minOrder = Math.max(1, market.minOrder / 100); // Convert back from integer, ensure at least 1
                 const maxQuantity = randomInt(Math.round(minOrder * 10), Math.round(minOrder * 100));
-                const quantity = Math.round(randomDecimal(minOrder, maxQuantity, 2) * 100); // Convert to 2 decimals
+                const quantity = Math.max(1, Math.round(randomDecimal(minOrder, maxQuantity, 2) * 100)); // Convert to 2 decimals, ensure at least 1
 
                 let filledQty = 0;
                 if (status === "partial") {
@@ -197,7 +197,7 @@ async function main() {
                         pair: market.pair,
                         side: side,
                         type: type,
-                        price: price,
+                        price: type === "market" ? 0 : price, // Market orders don't need price
                         quantity: quantity,
                         filledQty: filledQty,
                         avgFillPrice: avgFillPrice,
@@ -332,7 +332,7 @@ async function main() {
         const numBids = randomInt(8, 15);
         for (let i = 0; i < numBids; i++) {
             const spread = randomDecimal(-0.05, -0.001, 4); // Negative spread for bids (below market price)
-            const price = Math.round((pairPrice * (1 + spread)) * 100);
+            const price = Math.max(1, Math.round((pairPrice * (1 + spread)) * 100)); // Ensure price is at least 1
             const minOrder = Math.max(1, market.minOrder / 100); // Ensure at least 1
             const quantity = Math.max(1, Math.round(randomDecimal(minOrder, minOrder * randomInt(5, 20), 2) * 100)); // Ensure at least 1
             
@@ -349,7 +349,7 @@ async function main() {
                     quantity: quantity,
                     filledQty: 0,
                     avgFillPrice: 0,
-                    status: "open",
+                    status: "OPEN",
                     createdAt: new Date(Date.now() - randomInt(0, 3600000)), // Last hour
                 },
             });
@@ -359,7 +359,7 @@ async function main() {
         const numAsks = randomInt(8, 15);
         for (let i = 0; i < numAsks; i++) {
             const spread = randomDecimal(0.001, 0.05, 4); // Positive spread for asks (above market price)
-            const price = Math.round((pairPrice * (1 + spread)) * 100);
+            const price = Math.max(1, Math.round((pairPrice * (1 + spread)) * 100)); // Ensure price is at least 1
             const minOrder = Math.max(1, market.minOrder / 100); // Ensure at least 1
             const quantity = Math.max(1, Math.round(randomDecimal(minOrder, minOrder * randomInt(5, 20), 2) * 100)); // Ensure at least 1
             
@@ -376,7 +376,7 @@ async function main() {
                     quantity: quantity,
                     filledQty: 0,
                     avgFillPrice: 0,
-                    status: "open",
+                    status: "OPEN",
                     createdAt: new Date(Date.now() - randomInt(0, 3600000)), // Last hour
                 },
             });

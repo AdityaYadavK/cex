@@ -3,6 +3,7 @@ import express, { Request, Response, NextFunction } from "express";
 import { prisma } from "../utils/db";
 import { AppError } from "../utils/error.ts";
 import middleware from "../utils/middleware.ts";
+import { removeOrderFromBook } from "../engine/matching.ts";
 
 const router = express.Router();
 
@@ -22,7 +23,7 @@ router.delete("/:id", middleware, async (req: Request, res: Response, next: Next
         });
 
         if (!order) return res.status(404).json({ error: "order not found" });
-        if (!["open", "partial"].includes(order.status)) {
+        if (!["OPEN", "partial"].includes(order.status)) {
             return res.status(400).json({ error: "order cannot be cancelled" });
         }
 
@@ -35,13 +36,24 @@ router.delete("/:id", middleware, async (req: Request, res: Response, next: Next
         const lockAmount =
             order.side === "buy" ? order.price * remaining : remaining;
 
+        // 2.5. check current reserved balance to prevent negative values
+        const currentBalance = await prisma.balance.findUnique({
+            where: { userId_asset: { userId, asset: lockAsset } },
+        });
+
+        if (!currentBalance) {
+            return res.status(404).json({ error: "balance not found" });
+        }
+
+        const actualRelease = Math.min(lockAmount, currentBalance.reserved);
+
         // 3. release reserved funds + mark cancelled atomically
         await prisma.$transaction([
             prisma.balance.update({
                 where: { userId_asset: { userId, asset: lockAsset } },
                 data: {
-                    reserved: { decrement: lockAmount },
-                    available: { increment: lockAmount },
+                    reserved: { decrement: actualRelease },
+                    available: { increment: actualRelease },
                 },
             }),
             prisma.order.update({
@@ -53,11 +65,14 @@ router.delete("/:id", middleware, async (req: Request, res: Response, next: Next
                     userId,
                     asset: lockAsset,
                     eventType: "release",
-                    delta: lockAmount,
+                    delta: actualRelease,
                     balanceAfter: 0,
                 },
             }),
         ]);
+
+        // 4. remove from in-memory orderbook
+        removeOrderFromBook(id, order.pair, order.side);
 
         return res
             .status(200)

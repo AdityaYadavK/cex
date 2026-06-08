@@ -6,7 +6,6 @@
       "name": "cex",
       "dependencies": {
         "@joint-ops/hitlimit": "^1.5.0",
-        "@joint-ops/hitlimit-bun": "^1.5.0",
         "@prisma/adapter-pg": "^7.8.0",
         "@prisma/client": "^7.8.0",
         "@types/bcrypt": "^6.0.0",
@@ -42,8 +41,6 @@
     "@hono/node-server": ["@hono/node-server@1.19.11", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dr8/3zEaB+p0D2n/IUrlPF1HZm586qgJNXK1a9fhg/PzdtkK7Ksd5l312tJX2yBuALqDYBlG20QEbayqPyxn+g=="],
 
     "@joint-ops/hitlimit": ["@joint-ops/hitlimit@1.5.0", "", { "dependencies": { "@joint-ops/hitlimit-types": "1.5.0" }, "peerDependencies": { "@nestjs/common": ">=8.0.0", "@nestjs/core": ">=8.0.0", "better-sqlite3": ">=9.0.0", "fastify": ">=4.0.0", "fastify-plugin": ">=4.0.0", "hono": ">=4.0.0", "ioredis": ">=5.0.0", "mongodb": ">=6.0.0", "mysql2": ">=3.0.0", "pg": ">=8.0.0", "pino": ">=8.0.0", "winston": ">=3.0.0" }, "optionalPeers": ["@nestjs/common", "@nestjs/core", "better-sqlite3", "fastify", "fastify-plugin", "hono", "ioredis", "mongodb", "mysql2", "pg", "pino", "winston"] }, "sha512-nN9dAlkZbscSthfYs6yZhqAJpNfrCW8y6dYPGxzy9ZX809y+0ZpO8mpQ9z5dcyzHY5dntAC5yMYJa9x4k/eaUg=="],
-
-    "@joint-ops/hitlimit-bun": ["@joint-ops/hitlimit-bun@1.5.0", "", { "dependencies": { "@joint-ops/hitlimit-types": "1.5.0" }, "peerDependencies": { "elysia": ">=1.0.0", "hono": ">=4.0.0", "ioredis": ">=5.0.0", "mongodb": ">=6.0.0", "mysql2": ">=3.0.0", "pg": ">=8.0.0" }, "optionalPeers": ["elysia", "hono", "ioredis", "mongodb", "mysql2", "pg"] }, "sha512-lXssGDzHmSKG9qU/3DFxF2olFlmGHwPFXP+tIN8wXBFwHN6/Fo1RKD01DL4jQMy1j1wgEU7+Uli62CH2HX141A=="],
 
     "@joint-ops/hitlimit-types": ["@joint-ops/hitlimit-types@1.5.0", "", {}, "sha512-GN84tYDj1rgLMUfyCJhjnuNZDj3Vm08Lm46EUrbB3uewmxINx7FytUXRbxbXvj2/ow+lfOisEz57wa3ohWGM+w=="],
 

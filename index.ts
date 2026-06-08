@@ -13,6 +13,7 @@ import deposit from "./wallet/deposit.ts";
 import cp from "cookie-parser";
 import ehandler from "./utils/ehandler.ts";
 import tlist from "./trades/list.ts";
+import loadOrderBook from "./engine/matching.ts";
 
 const app = express();
 
@@ -35,6 +36,9 @@ app.use("/order/cancel", cancel);
 app.use("/trade/list", tlist);
 
 app.use(ehandler);
+
+// Initialize orderbook on startup
+loadOrderBook().catch(console.error);
 
 app.listen(process.env.PORT || 3000, () => {
     console.log(`listening on 3000!`);

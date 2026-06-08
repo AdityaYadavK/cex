@@ -10,7 +10,8 @@
     },
     "scripts": {
         "dev": "bun --watch index.ts",
-        "seed": "bun utils/seed.ts"
+        "seed": "bun utils/seed.ts",
+        "start": "bun index.ts"
     },
     "peerDependencies": {
         "typescript": "^5"

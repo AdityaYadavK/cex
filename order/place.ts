@@ -44,8 +44,48 @@ router.post(
 
         // lock funds
         const lockAsset = side === "buy" ? market.quoteAsset : market.baseAsset;
-        // market buy: price is undefined — lock available balance, caller must pass quantity in quote units
-        const lockAmount = side === "buy" ? (price ?? 0) * quantity : quantity;
+        let lockAmount: number;
+
+        if (type === "market" && side === "buy") {
+            // For market buy orders, estimate the cost using a conservative multiplier
+            // Get the best ask price from the orderbook to estimate cost
+            const book = await prisma.order.findMany({
+                where: {
+                    marketId: market.id,
+                    side: "sell",
+                    status: { in: ["OPEN", "partial"] },
+                },
+                orderBy: { price: "asc" },
+                take: 1,
+            });
+
+            let estimatedPrice = price || 0; // Use provided price as fallback
+            if (book.length > 0 && book[0].price > 0) {
+                estimatedPrice = book[0].price;
+            } else {
+                // Fallback: use a reasonable default if no orders in book
+                estimatedPrice = 5000000; // $50,000 as default for BTC
+            }
+
+            // Use 2x the best ask price as a conservative estimate to account for slippage
+            lockAmount = estimatedPrice * quantity * 2;
+
+            // Ensure we don't lock more than available balance
+            const bal = await prisma.balance.findUnique({
+                where: { userId_asset: { userId, asset: lockAsset } },
+            });
+            if (!bal || bal.available <= 0)
+                return next(new AppError("insufficient balance", 400));
+
+            // Cap at available balance
+            lockAmount = Math.min(lockAmount, bal.available);
+        } else {
+            lockAmount = side === "buy" ? price! * quantity : quantity;
+        }
+
+        if (lockAmount == null) {
+            return next(new AppError("insufficient balance", 402));
+        }
 
         if (lockAmount <= 0) {
             return next(new AppError("invalid lock amount", 400));
@@ -78,26 +118,68 @@ router.post(
                 quantity,
                 filledQty: 0,
                 avgFillPrice: 0,
-                status: "open",
+                status: "OPEN",
             },
         });
 
-        const orderWithMeta = {
-            ...order,
-            pair: market.pair,
+        const porder = {
+            id: order.id,
+            pair: order.pair,
+            side: order.side,
+            type: order.type,
+            price: order.price,
+            quantity: order.quantity,
+            filledQty: order.filledQty,
+            status: order.status,
+            userId: order.userId,
             baseAsset: market.baseAsset,
             quoteAsset: market.quoteAsset,
         };
 
-        const trades = await match(orderWithMeta);
+        const trades = await match(porder);
+
+        const totalQty = trades.reduce((sum, t) => sum + t.fillQty, 0);
+        const totalNotional = trades.reduce(
+            (sum, t) => sum + t.fillPrice * t.fillQty,
+            0,
+        );
+
+        // refund the remaining balace after matching
+        if (type === "market" && side === "buy") {
+            const usedQuote = trades.reduce(
+                (sum, t) => sum + t.fillPrice * t.fillQty,
+                0,
+            );
+            const refund = lockAmount - usedQuote;
+            if (refund > 0) {
+                // Check current reserved balance to prevent negative values
+                const currentBalance = await prisma.balance.findUnique({
+                    where: { userId_asset: { userId, asset: lockAsset } },
+                });
+
+                if (currentBalance) {
+                    const actualRefund = Math.min(refund, currentBalance.reserved);
+                    if (actualRefund > 0) {
+                        await prisma.balance.update({
+                            where: { userId_asset: { userId, asset: lockAsset } },
+                            data: {
+                                reserved: { decrement: actualRefund },
+                                available: { increment: actualRefund },
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
+        const avgFillPrice = totalQty > 0 ? totalNotional / totalQty : 0;
 
         await prisma.order.update({
             where: { id: order.id },
             data: {
-                status: orderWithMeta.status,
-                filledQty: orderWithMeta.filledQty,
-                avgFillPrice:
-                    trades.length > 0 ? trades[trades.length - 1].price : 0,
+                status: porder.status,
+                filledQty: porder.filledQty,
+                avgFillPrice: avgFillPrice,
             },
         });
 
@@ -109,12 +191,12 @@ router.post(
                 type,
                 price,
                 quantity,
-                status: orderWithMeta.status,
-                filledQty: orderWithMeta.filledQty,
+                status: porder.status,
+                filledQty: porder.filledQty,
             },
             trades: trades.map((t) => ({
-                price: t.price,
-                qty: t.qty,
+                price: t.fillPrice,
+                qty: t.fillQty,
                 executedAt: t.executedAt,
             })),
         });
