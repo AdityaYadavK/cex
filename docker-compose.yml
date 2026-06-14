@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: cex-postgres
+    environment:
+      POSTGRES_USER: cex_user
+      POSTGRES_PASSWORD: cex_password
+      POSTGRES_DB: cex_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cex_user -d cex_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  cex:
+    build: .
+    container_name: cex-api
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://cex_user:cex_password@postgres:5432/cex_db?schema=public
+      JWT_SECRET: ${JWT_SECRET:-change-this-secret-in-production}
+      JWT_EXPIRES_IN: 30d
+      COOKIE_SECURE: "true"
+      COOKIE_HTTP_ONLY: "true"
+      COOKIE_SAME_SITE: lax
+      RATE_LIMIT_WINDOW: 1m
+      RATE_LIMIT_MAX_REQUESTS: 100
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      CORS_CREDENTIALS: "true"
+      WS_PATH: /ws
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

@@ -8,7 +8,7 @@ import middleware from "../utils/middleware.ts";
 const router = express.Router();
 
 const schema = z.object({
-    pair: z.string(),
+    pair: z.string().regex(/^[A-Z]+\/[A-Z]+$/, "Invalid pair format. Use format like 'BTC/USDT'"),
     side: z.enum(["buy", "sell"]),
     type: z.enum(["limit", "market"]),
     price: z.number().positive().optional(),
@@ -60,7 +60,7 @@ router.post(
             });
 
             let estimatedPrice = price || 0; // Use provided price as fallback
-            if (book.length > 0 && book[0].price > 0) {
+            if (book.length > 0 && book[0] && book[0].price > 0) {
                 estimatedPrice = book[0].price;
             } else {
                 // Fallback: use a reasonable default if no orders in book

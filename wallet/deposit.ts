@@ -52,13 +52,22 @@ router.post(
             },
         });
 
-        // ledger event
+        // ledger event with correct balance after
+        const updatedBalance = await prisma.balance.findUnique({
+            where: {
+                userId_asset: {
+                    userId: id,
+                    asset: asset,
+                },
+            },
+        });
+
         const led = await prisma.ledgerEvent.create({
             data: {
                 asset: asset,
                 eventType: "deposit",
                 delta: amount,
-                balanceAfter: balance.available,
+                balanceAfter: updatedBalance?.available || 0,
                 userId: id,
             },
         });

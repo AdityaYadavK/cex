@@ -15,5 +15,12 @@ FROM base AS release
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/generated ./generated
 EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD bun --health || exit 1
+
+# Run migrations and start server
 CMD ["sh", "-c", "bunx --bun prisma migrate deploy && bun run start"]

@@ -4,6 +4,7 @@ import { prisma } from "../utils/db";
 import { AppError } from "../utils/error.ts";
 import middleware from "../utils/middleware.ts";
 import { removeOrderFromBook } from "../engine/matching.ts";
+import { broadcastorderbook } from "../ws/server.ts";
 
 const router = express.Router();
 
@@ -73,6 +74,18 @@ router.delete("/:id", middleware, async (req: Request, res: Response, next: Next
 
         // 4. remove from in-memory orderbook
         removeOrderFromBook(id, order.pair, order.side);
+
+        // 5. broadcast orderbook update
+        broadcastorderbook(order.pair, {
+            type: "remove",
+            order: {
+                id: order.id,
+                side: order.side,
+                price: order.price,
+                quantity: order.quantity,
+                status: "cancelled",
+            },
+        });
 
         return res
             .status(200)

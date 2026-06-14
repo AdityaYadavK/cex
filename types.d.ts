@@ -1,3 +1,5 @@
+import "express";
+
 type Order = {
     id: string;
     pair: string; // e.g. "BTC/USDT"
@@ -20,3 +22,9 @@ type Trade = {
     fillPrice: number;
     executedAt: Date;
 };
+
+declare module "express" {
+    interface Request {
+        id?: string;
+    }
+}

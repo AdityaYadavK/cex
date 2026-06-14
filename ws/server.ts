@@ -1,14 +1,52 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { IncomingMessage } from "http";
 import { Server } from "http";
+import jwt from "jsonwebtoken";
+import { prisma } from "../utils/db.ts";
 
 const ordersubs = new Map<string, Set<WebSocket>>();
 const tradesubs = new Map<string, Set<WebSocket>>();
 
-export function init(server: Server) {
-    const wss = new WebSocketServer({ server, path: "/ws" });
+// Store user ID with WebSocket connection
+const wsUsers = new Map<WebSocket, string>();
 
-    wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
+async function authenticateWebSocket(req: IncomingMessage): Promise<string | null> {
+    try {
+        const url = new URL(req.url!, `http://localhost`);
+        const token = url.searchParams.get("token");
+        
+        if (!token) return null;
+
+        const payload = jwt.verify(token, process.env.JWT_SECRET || "maxver");
+        if (typeof payload === "string") return null;
+        
+        const userId = (payload as any).id;
+        if (!userId) return null;
+
+        // Verify user exists
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+        });
+
+        return user ? userId : null;
+    } catch (error) {
+        return null;
+    }
+}
+
+export function init(server: Server) {
+    const wss = new WebSocketServer({ server, path: process.env.WS_PATH || "/ws" });
+
+    wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
+        // Authenticate WebSocket connection
+        const userId = await authenticateWebSocket(req);
+        if (!userId) {
+            ws.close(1008, "authentication failed");
+            return;
+        }
+
+        wsUsers.set(ws, userId);
+
         const url = new URL(req.url!, `http://localhost`);
         const parts = url.pathname.split("/").filter(Boolean);
 
@@ -33,11 +71,13 @@ export function init(server: Server) {
         ws.on("close", () => {
             unsubscribe(ordersubs, pair, ws);
             unsubscribe(tradesubs, pair, ws);
+            wsUsers.delete(ws);
         });
 
         ws.on("error", () => {
             unsubscribe(ordersubs, pair, ws);
             unsubscribe(tradesubs, pair, ws);
+            wsUsers.delete(ws);
         });
     });
     console.log("web socket event ready");

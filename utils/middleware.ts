@@ -11,7 +11,7 @@ export default async function middleware(
     const token = req.cookies.token;
     if (!token) return next(new AppError("Unauthorized!", 401));
     try {
-        const payload = jwt.verify(token, "maxver");
+        const payload = jwt.verify(token, process.env.JWT_SECRET || "maxver");
         if (typeof payload == "string") {
             return next(new AppError("invalid payload", 401));
         }

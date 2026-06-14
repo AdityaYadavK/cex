@@ -32,12 +32,16 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
         },
     });
     if (!u) return next(new AppError("internal db error", 500));
-    const token = jwt.sign({ id: u.id }, "maxver", { expiresIn: "30d" });
+    const jwtSecret = process.env.JWT_SECRET || "maxver";
+    const jwtExpiresIn = process.env.JWT_EXPIRES_IN || "30d";
+    // @ts-ignore - TypeScript issue with jsonwebtoken types
+    const token = jwt.sign({ id: u.id }, jwtSecret, { expiresIn: jwtExpiresIn });
+    const isSecure = process.env.NODE_ENV === "production" ? (process.env.COOKIE_SECURE === "true") : false;
     res.cookie("token", token, {
-        httpOnly: true,
-        secure: false,
-        maxAge: 1000 * 60 * 24 * 30,
-        // signed: true,
+        httpOnly: process.env.COOKIE_HTTP_ONLY !== "false",
+        secure: isSecure,
+        sameSite: (process.env.COOKIE_SAME_SITE as "lax" | "strict" | "none") || "lax",
+        maxAge: 1000 * 60 * 60 * 24 * 30,
         path: "/",
     })
         .status(200)

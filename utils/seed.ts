@@ -14,7 +14,11 @@ function randomDecimal(min: number, max: number, decimals: number = 2): number {
 
 // Helper function to pick random item from array
 function randomPick<T>(arr: T[]): T {
-    return arr[Math.floor(Math.random() * arr.length)];
+    if (arr.length === 0) {
+        throw new Error("Cannot pick from empty array");
+    }
+    const index = Math.floor(Math.random() * arr.length);
+    return arr[index]!;
 }
 
 // Asset definitions with realistic price ranges
@@ -159,8 +163,8 @@ async function main() {
         if (!baseConfig || !quoteConfig) continue;
 
         // Generate realistic price for this pair
-        const basePrice = randomDecimal(baseConfig.priceRange[0], baseConfig.priceRange[1], 2);
-        const quotePrice = randomDecimal(quoteConfig.priceRange[0], quoteConfig.priceRange[1], 2);
+        const basePrice = randomDecimal(baseConfig.priceRange[0] || 65000, baseConfig.priceRange[1] || 75000, 2);
+        const quotePrice = randomDecimal(quoteConfig.priceRange[0] || 1, quoteConfig.priceRange[1] || 1, 2);
         const pairPrice = baseAsset === "USDT" ? quotePrice : (quoteAsset === "USDT" ? basePrice : basePrice / quotePrice);
 
         // Create orders for each user (limit to 2-3 orders per user per market for performance)
@@ -255,6 +259,7 @@ async function main() {
                         // Create ledger events for the trade
                         const asset = side === "buy" ? baseAsset : quoteAsset;
                         const delta = side === "buy" ? tradeQty : Math.round(tradeQty * tradePrice / 100);
+                        if (asset === undefined) continue;
 
                         await prisma.ledgerEvent.create({
                             data: {
@@ -324,8 +329,8 @@ async function main() {
         if (!baseConfig || !quoteConfig) continue;
 
         // Generate base price for this pair
-        const basePrice = randomDecimal(baseConfig.priceRange[0], baseConfig.priceRange[1], 2);
-        const quotePrice = randomDecimal(quoteConfig.priceRange[0], quoteConfig.priceRange[1], 2);
+        const basePrice = randomDecimal(baseConfig.priceRange[0] || 65000, baseConfig.priceRange[1] || 75000, 2);
+        const quotePrice = randomDecimal(quoteConfig.priceRange[0] || 1, quoteConfig.priceRange[1] || 1, 2);
         const pairPrice = baseAsset === "USDT" ? quotePrice : (quoteAsset === "USDT" ? basePrice : basePrice / quotePrice);
 
         // Create bid orders (buy orders) - descending price
